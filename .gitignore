@@ -1,0 +1,12 @@
+# Secrets & credentials
+.env
+key.json
+session.session
+
+# Python caches
+__pycache__/
+.mypy_cache/
+*.pyc
+
+# Generated HTML reports
+*.html
