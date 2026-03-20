@@ -42,21 +42,29 @@ echo -n "1857876" | gcloud secrets create telegram-api-id --data-file=-
 echo -n "13d15d14c7c4117c9603b0c7b1298f42" | gcloud secrets create telegram-api-hash --data-file=-
 echo -n "+972543382381" | gcloud secrets create telegram-phone --data-file=-
 echo -n "PASTE_YOUR_STRING_SESSION_HERE" | gcloud secrets create telegram-string-session --data-file=-
-gcloud secrets create gcs-service-account-key --data-file=key.json
 ```
 
-Grant the default Compute Engine service account access:
+Grant the default Compute Engine service account access to the secrets:
 
 ```bash
 export SA=$(gcloud iam service-accounts list \
   --filter="displayName:Compute Engine default" \
   --format="value(email)")
 
-for SECRET in telegram-api-id telegram-api-hash telegram-phone telegram-string-session gcs-service-account-key; do
+for SECRET in telegram-api-id telegram-api-hash telegram-phone telegram-string-session; do
   gcloud secrets add-iam-policy-binding $SECRET \
     --member="serviceAccount:$SA" \
     --role="roles/secretmanager.secretAccessor"
 done
+```
+
+Grant the service account permission to sign URLs via the IAM signBlob API
+(used instead of a key file for `generate_signed_url`):
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding $SA \
+  --member="serviceAccount:$SA" \
+  --role="roles/iam.serviceAccountTokenCreator"
 ```
 
 ## 3. Create the reports GCS bucket
@@ -112,8 +120,7 @@ gcloud run jobs create telegram-fetch-messages \
   --memory=1Gi \
   --task-timeout=30m \
   --set-secrets="TELEGRAM_API_ID=telegram-api-id:latest,TELEGRAM_API_HASH=telegram-api-hash:latest,TELEGRAM_PHONE=telegram-phone:latest,TELEGRAM_STRING_SESSION=telegram-string-session:latest" \
-  --set-secrets="/secrets/key.json=gcs-service-account-key:latest" \
-  --set-env-vars="GCS_BUCKET=my-telegram-bot-media-bucker,GCS_REPORTS_BUCKET=$REPORTS_BUCKET,GOOGLE_APPLICATION_CREDENTIALS=/secrets/key.json,GCS_SIGNED_URL_EXPIRY_DAYS=7"
+  --set-env-vars="GCS_BUCKET=my-telegram-bot-media-bucker,GCS_REPORTS_BUCKET=$REPORTS_BUCKET,GCS_SIGNED_URL_EXPIRY_DAYS=7"
 ```
 
 Test it manually:

@@ -24,6 +24,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
+from google import auth
+from google.auth.credentials import Signing
+from google.auth.transport import requests as auth_requests
 from google.cloud import storage as gcs
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -52,16 +55,31 @@ def get_credential(env_key):
 GCS_SIGNED_URL_EXPIRY_DAYS = int(os.environ.get("GCS_SIGNED_URL_EXPIRY_DAYS", "7"))
 
 
+def _get_gcs_credentials():
+    credentials, _ = auth.default()
+    if not isinstance(credentials, Signing):
+        credentials.refresh(auth_requests.Request())
+    return credentials
+
+
 def upload_to_gcs(local_path: str, bucket_name: str, prefix: str) -> str:
-    client = gcs.Client()
+    credentials = _get_gcs_credentials()
+    client = gcs.Client(credentials=credentials)
     bucket = client.bucket(bucket_name)
     blob_name = f"{prefix}/{Path(local_path).name}"
     blob = bucket.blob(blob_name)
     content_type = mimetypes.guess_type(local_path)[0] or "application/octet-stream"
     blob.upload_from_filename(local_path, content_type=content_type)
+
+    signing_kwargs: dict = {"version": "v4"}
+    if not isinstance(credentials, Signing):
+        signing_kwargs["service_account_email"] = credentials.service_account_email
+        signing_kwargs["access_token"] = credentials.token
+
     return blob.generate_signed_url(
         expiration=timedelta(days=GCS_SIGNED_URL_EXPIRY_DAYS),
         method="GET",
+        **signing_kwargs,
     )
 
 
