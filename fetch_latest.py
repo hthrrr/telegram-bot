@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.tl.types import Channel, Chat, MessageMediaDocument, MessageMediaPhoto
 
-from fetch_messages import build_html, get_credential, upload_to_gcs
+from fetch_messages import build_html, get_credential, send_email, upload_report_to_gcs, upload_to_gcs
 
 load_dotenv()
 
@@ -33,8 +33,14 @@ def parse_args():
     parser.add_argument(
         "--limit",
         type=int,
-        default=10,
-        help="Number of recent messages per channel (default: 10)",
+        default=3,
+        help="Number of recent messages per channel (default: 3)",
+    )
+    parser.add_argument(
+        "--max-channels",
+        type=int,
+        default=3,
+        help="Maximum number of channels to fetch from (default: 3)",
     )
     return parser.parse_args()
 
@@ -64,7 +70,7 @@ async def download_and_upload(client, msg, tmp_dir, gcs_bucket, gcs_prefix):
     return None, None
 
 
-async def fetch_latest(channels_only: bool, limit: int):
+async def fetch_latest(channels_only: bool, limit: int, max_channels: int):
     api_id = int(get_credential("TELEGRAM_API_ID"))
     api_hash = get_credential("TELEGRAM_API_HASH")
     phone = get_credential("TELEGRAM_PHONE")
@@ -80,7 +86,7 @@ async def fetch_latest(channels_only: bool, limit: int):
                 return isinstance(entity, Channel) and entity.broadcast
             return isinstance(entity, (Channel, Chat))
 
-        targets = [d for d in dialogs if is_wanted(d)]
+        targets = [d for d in dialogs if is_wanted(d)][:max_channels]
         kind = "broadcast channel(s)" if channels_only else "channel(s)/group(s)"
         print(f"\nFetching latest {limit} messages from {len(targets)} {kind}...\n")
 
@@ -122,7 +128,7 @@ async def fetch_latest(channels_only: bool, limit: int):
                     block["messages"].append({
                         "ts": ts,
                         "sender": sender,
-                        "text": text[:200],
+                        "text": text,
                         "media_path": media_url,
                         "media_type": media_type,
                     })
@@ -134,12 +140,22 @@ async def fetch_latest(channels_only: bool, limit: int):
         print(f"Done. {total} message(s) fetched from {len(channel_blocks)} channels.")
 
         if channel_blocks:
-            out_path = f"latest_messages_{run_ts}.html"
-            with open(out_path, "w", encoding="utf-8") as f:
-                f.write(build_html(channel_blocks))
-            print(f"HTML report saved to {out_path}")
+            html_content = build_html(channel_blocks)
+            reports_bucket = os.environ.get("GCS_REPORTS_BUCKET")
+            if reports_bucket:
+                url = upload_report_to_gcs(html_content, reports_bucket, gcs_prefix)
+                print(f"HTML report uploaded to {url}")
+                send_email(
+                    subject=f"Telegram: {total} latest messages",
+                    body=f"Report: {url}",
+                )
+            else:
+                out_path = f"latest_messages_{run_ts}.html"
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                print(f"HTML report saved to {out_path}")
 
 
 if __name__ == "__main__":
     args = parse_args()
-    asyncio.run(fetch_latest(channels_only=args.channels_only, limit=args.limit))
+    asyncio.run(fetch_latest(channels_only=args.channels_only, limit=args.limit, max_channels=args.max_channels))

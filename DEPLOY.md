@@ -42,7 +42,14 @@ echo -n "1857876" | gcloud secrets create telegram-api-id --data-file=-
 echo -n "13d15d14c7c4117c9603b0c7b1298f42" | gcloud secrets create telegram-api-hash --data-file=-
 echo -n "+972543382381" | gcloud secrets create telegram-phone --data-file=-
 echo -n "PASTE_YOUR_STRING_SESSION_HERE" | gcloud secrets create telegram-string-session --data-file=-
+echo -n "your.email@gmail.com" | gcloud secrets create gmail-address --data-file=-
+echo -n "YOUR_APP_PASSWORD" | gcloud secrets create gmail-app-password --data-file=-
 ```
+
+To generate a Gmail app password:
+1. Go to https://myaccount.google.com/apppasswords (requires 2FA enabled)
+2. Create a new app password (name it "telegram-bot" or similar)
+3. Copy the 16-character password and use it above
 
 Grant the default Compute Engine service account access to the secrets:
 
@@ -51,7 +58,7 @@ export SA=$(gcloud iam service-accounts list \
   --filter="displayName:Compute Engine default" \
   --format="value(email)")
 
-for SECRET in telegram-api-id telegram-api-hash telegram-phone telegram-string-session; do
+for SECRET in telegram-api-id telegram-api-hash telegram-phone telegram-string-session gmail-address gmail-app-password; do
   gcloud secrets add-iam-policy-binding $SECRET \
     --member="serviceAccount:$SA" \
     --role="roles/secretmanager.secretAccessor"
@@ -119,7 +126,7 @@ gcloud run jobs create telegram-fetch-messages \
   --region=$REGION \
   --memory=1Gi \
   --task-timeout=30m \
-  --set-secrets="TELEGRAM_API_ID=telegram-api-id:latest,TELEGRAM_API_HASH=telegram-api-hash:latest,TELEGRAM_PHONE=telegram-phone:latest,TELEGRAM_STRING_SESSION=telegram-string-session:latest" \
+  --set-secrets="TELEGRAM_API_ID=telegram-api-id:latest,TELEGRAM_API_HASH=telegram-api-hash:latest,TELEGRAM_PHONE=telegram-phone:latest,TELEGRAM_STRING_SESSION=telegram-string-session:latest,GMAIL_ADDRESS=gmail-address:latest,GMAIL_APP_PASSWORD=gmail-app-password:latest" \
   --set-env-vars="GCS_BUCKET=my-telegram-bot-media-bucker,GCS_REPORTS_BUCKET=$REPORTS_BUCKET,GCS_SIGNED_URL_EXPIRY_DAYS=7"
 ```
 
@@ -161,9 +168,65 @@ gcloud scheduler jobs create http telegram-daily-fetch \
   --oauth-service-account-email="scheduler-invoker@$PROJECT_ID.iam.gserviceaccount.com"
 ```
 
-## Updating the image
+## 7. Set up CI/CD (automated deploy on git push)
 
-After making code changes, rebuild and update:
+See `.github/workflows/deploy.yml`. After the one-time setup below, every push
+to `main` will automatically rebuild and deploy — no manual commands needed.
+
+### One-time setup
+
+1. Create a GCP service account for GitHub Actions:
+
+```bash
+gcloud iam service-accounts create github-actions \
+  --display-name="GitHub Actions deployer"
+
+export GH_SA=github-actions@${PROJECT_ID}.iam.gserviceaccount.com
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$GH_SA" \
+  --role="roles/cloudbuild.builds.builder"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$GH_SA" \
+  --role="roles/run.admin"
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$GH_SA" \
+  --role="roles/artifactregistry.writer"
+
+gcloud iam service-accounts add-iam-policy-binding \
+  $(gcloud iam service-accounts list --filter="displayName:Compute Engine default" --format="value(email)") \
+  --member="serviceAccount:$GH_SA" \
+  --role="roles/iam.serviceAccountUser"
+```
+
+2. Set up Workload Identity Federation (keyless auth — no JSON keys):
+
+```bash
+gcloud iam workload-identity-pools create github-pool \
+  --location="global" \
+  --display-name="GitHub Actions pool"
+
+gcloud iam workload-identity-pools providers create-oidc github-provider \
+  --location="global" \
+  --workload-identity-pool="github-pool" \
+  --display-name="GitHub provider" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --issuer-uri="https://token.actions.githubusercontent.com"
+
+gcloud iam service-accounts add-iam-policy-binding $GH_SA \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')/locations/global/workloadIdentityPools/github-pool/attribute.repository/hthrrr/telegram-bot"
+```
+
+3. Add these as GitHub repository secrets (Settings > Secrets and variables > Actions):
+
+   - `GCP_PROJECT_ID` = `telegram-bot-490722`
+   - `GCP_WIF_PROVIDER` = the full provider name (output of the command above, looks like `projects/123456/locations/global/workloadIdentityPools/github-pool/providers/github-provider`)
+   - `GCP_SA_EMAIL` = `github-actions@telegram-bot-490722.iam.gserviceaccount.com`
+
+## Updating the image (manual fallback)
 
 ```bash
 gcloud builds submit --tag $IMAGE .

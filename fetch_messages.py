@@ -19,8 +19,10 @@ import asyncio
 import html
 import mimetypes
 import os
+import smtplib
 import tempfile
 from datetime import datetime, timedelta
+from email.mime.text import MIMEText
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -182,6 +184,32 @@ function toggle(id) {{
 </html>"""
 
 
+def send_email(subject: str, body: str):
+    sender = os.environ.get("GMAIL_ADDRESS")
+    password = os.environ.get("GMAIL_APP_PASSWORD")
+    recipient = os.environ.get("NOTIFY_EMAIL", sender)
+    print(f"send_email: sender={sender}, recipient={recipient}, password_set={bool(password)}")
+    if not sender or not password:
+        print("GMAIL_ADDRESS or GMAIL_APP_PASSWORD not set, skipping email notification")
+        return
+
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = recipient
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            print("send_email: STARTTLS established, logging in...")
+            server.login(sender, password)
+            print("send_email: login successful, sending...")
+            server.sendmail(sender, recipient, msg.as_string())
+        print(f"Email notification sent to {recipient}")
+    except Exception as e:
+        print(f"send_email failed: {e}")
+
+
 def upload_report_to_gcs(html_content: str, bucket_name: str, prefix: str) -> str:
     client = gcs.Client()
     bucket = client.bucket(bucket_name)
@@ -281,7 +309,7 @@ async def fetch_unread_messages(channels_only: bool):
                     block["messages"].append({
                         "ts": ts,
                         "sender": sender,
-                        "text": text[:200],
+                        "text": text,
                         "media_path": media_url,
                         "media_type": media_type,
                     })
@@ -293,17 +321,20 @@ async def fetch_unread_messages(channels_only: bool):
 
         print(f"Done. {total} unread message(s) found.")
 
-        if channel_blocks:
-            html_content = build_html(channel_blocks)
-            reports_bucket = os.environ.get("GCS_REPORTS_BUCKET")
-            if reports_bucket:
-                url = upload_report_to_gcs(html_content, reports_bucket, gcs_prefix)
-                print(f"HTML report uploaded to {url}")
-            else:
-                out_path = f"unread_messages_{run_ts}.html"
-                with open(out_path, "w", encoding="utf-8") as f:
-                    f.write(html_content)
-                print(f"HTML report saved to {out_path}")
+        html_content = build_html(channel_blocks)
+        reports_bucket = os.environ.get("GCS_REPORTS_BUCKET")
+        if reports_bucket:
+            url = upload_report_to_gcs(html_content, reports_bucket, gcs_prefix)
+            print(f"HTML report uploaded to {url}")
+            send_email(
+                subject=f"Telegram: {total} unread messages",
+                body=f"Report: {url}",
+            )
+        else:
+            out_path = f"unread_messages_{run_ts}.html"
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            print(f"HTML report saved to {out_path}")
 
 
 if __name__ == "__main__":
