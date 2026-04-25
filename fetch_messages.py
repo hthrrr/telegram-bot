@@ -280,6 +280,7 @@ async def fetch_unread_messages(channels_only: bool):
                         local_path = str(Path(tmp_dir) / f"{msg.id}.jpg")
                         await client.download_media(msg, file=local_path)
                         media_url = upload_to_gcs(local_path, gcs_bucket, gcs_prefix)
+                        os.remove(local_path)
                         print(f"  [{ts}] {sender}: [photo] {text[:150]}")
                     elif isinstance(msg.media, MessageMediaDocument):
                         mime = msg.media.document.mime_type or ""
@@ -289,6 +290,7 @@ async def fetch_unread_messages(channels_only: bool):
                             local_path = str(Path(tmp_dir) / f"{msg.id}.{ext}")
                             await client.download_media(msg, file=local_path)
                             media_url = upload_to_gcs(local_path, gcs_bucket, gcs_prefix)
+                            os.remove(local_path)
                             print(f"  [{ts}] {sender}: [video] {text[:150]}")
                         elif mime.startswith("image/"):
                             media_type = "photo"
@@ -296,6 +298,7 @@ async def fetch_unread_messages(channels_only: bool):
                             local_path = str(Path(tmp_dir) / f"{msg.id}.{ext}")
                             await client.download_media(msg, file=local_path)
                             media_url = upload_to_gcs(local_path, gcs_bucket, gcs_prefix)
+                            os.remove(local_path)
                             print(f"  [{ts}] {sender}: [image] {text[:150]}")
                         else:
                             if not text:
